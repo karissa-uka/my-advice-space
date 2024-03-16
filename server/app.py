@@ -908,6 +908,7 @@ def get_notifications(user_id):
                 'post_id': comment.post_id,
                 'content': comment.content,
                 'created_at': comment.created_at,
+                
             })
 
     if notification_type == "likes" or notification_type is None:
