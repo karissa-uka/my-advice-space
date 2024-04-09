@@ -4,6 +4,7 @@ from flask_bcrypt import Bcrypt
 from flask_cors import CORS, cross_origin
 from flask_session import Session
 from flask_migrate import Migrate
+from sqlalchemy import or_
 from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.exc import SQLAlchemyError
 from flask_admin import Admin
@@ -56,6 +57,11 @@ def get_user_by_email(email):
 
         if not user:
             return jsonify({"error": "User not found"}), 404
+        
+        space_list = [{
+                "id": space.id,
+                "title": space.title,
+            } for space in user.spaces]
 
         return jsonify({
             "id": user.id,
@@ -64,6 +70,7 @@ def get_user_by_email(email):
             "lastName": user.last_name,
             "occupation": user.occupation,
             "user_picture": user.picture_path,
+            "user_space": space_list,
         })
 
     except Exception as e:
@@ -72,7 +79,7 @@ def get_user_by_email(email):
 @app.route('/assets/<path:filename>')
 def serve_static(filename):
     return send_from_directory('assets', filename)
-
+    
 @app.route("/register", methods=["POST"])
 def register_user():
     try:
@@ -141,6 +148,11 @@ def register_user():
                 "lastName": friend.last_name,
                 "email": friend.email,
             } for friend in new_user.friends]
+        
+        space_list = [{
+                "id": space.id,
+                "title": space.title,
+            } for space in new_user.spaces]
 
         return jsonify({
             "id": new_user.id,
@@ -150,6 +162,7 @@ def register_user():
             "friends": friends_list,
             "occupation": new_user.occupation,
             "user_picture": new_user.picture_path,
+            "user_space": space_list,
         }), 201
     
     except Exception as e:
@@ -178,6 +191,11 @@ def login_user():
                 "lastName": friend.last_name,
                 "email": friend.email,
             } for friend in user.friends]
+        
+        space_list = [{
+                "id": space.id,
+                "title": space.title,
+            } for space in user.spaces]
 
         return jsonify({
             "id": user.id,
@@ -187,6 +205,7 @@ def login_user():
             "friends": friends_list,
             "occupation": user.occupation,
             "user_picture": user.picture_path,
+            "user_space": space_list,
         })
     except Exception as e:
         print(e)
@@ -650,9 +669,18 @@ def create_space():
 def get_space(space_id):
     try:
         space = Space.query.filter_by(id=space_id).first()
-        space_data = {"id": space.id, "title": space.title, "isPublic": space.is_public}
         
-        return jsonify(space_data), 201
+        if not space:
+            return jsonify({"error": "Space not found"}), 404
+
+        space_data = {
+            "id": space.id,
+            "title": space.title,
+            "isPublic": space.is_public,
+            "members": [member.id for member in space.members]  
+        }
+        
+        return jsonify(space_data), 200
     
     except Exception as e:
         print(e)
@@ -664,7 +692,7 @@ def get_spaces():
         spaces = Space.query.all()
         space_list = [{"id": space.id, "title": space.title, "isPublic": space.is_public} for space in spaces]
 
-        return jsonify({"spaces": space_list})
+        return jsonify({"spaces": space_list}), 200
 
     except Exception as e:
         print(e)
@@ -674,54 +702,142 @@ def get_spaces():
 def get_user_spaces(user_id):
     try:
         user = User.query.get(user_id)
-
         if not user:
             return jsonify({"error": "User not found"}), 404
 
-        user_spaces = user.joined_spaces
-
+        user_spaces = user.joined_spaces.all()
         space_list = [{"id": space.id, "title": space.title} for space in user_spaces]
-
-        return jsonify({"spaces": space_list})
+        return jsonify({"spaces": space_list}), 200
 
     except Exception as e:
         print(e)
+        db.session.rollback()
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
-
-@app.route("/spaces/<space_id>", methods=["DELETE"])
-def delete_space(space_id):
+    
+@app.route("/spaces/<space_id>/join", methods=["POST"])
+def join_space(space_id):
     try:
-        user_id = session.get("user_id")
-
-        if not user_id:
-            print("Unauthorized: User not authenticated")
-            return jsonify({"error": "Unauthorized"}), 401
-
-        user = User.query.filter_by(id=user_id).first()
-
-        if not user:
-            print("User not found")
-            return jsonify({"error": "User not found"}), 404
-
+        # Check if the space exists
         space = Space.query.filter_by(id=space_id).first()
 
         if not space:
             print("Space not found")
             return jsonify({"error": "Space not found"}), 404
 
-        print(f"User ID: {user.id}, Space Creator ID: {space.creator_id}")
+        # Add the user to the space's members
+        user_id = request.json.get("user_id")  # Assuming user_id is sent in the request body
 
-        if user.id != space.creator_id:
+        if not user_id:
+            print("No user ID provided")
+            return jsonify({"error": "No user ID provided"}), 400
+
+        space.add_member(user_id)
+        db.session.commit()
+
+        print("User joined the space successfully.")
+
+        return jsonify({"success": True, "message": "User joined the space successfully."}), 200
+
+    except Exception as e:
+        print(f"Error: {e}")
+        db.session.rollback()
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@app.route("/spaces/<int:space_id>/leave", methods=["POST"])
+def leave_space(space_id):
+    try:
+        # Check if the space exists
+        space = Space.query.filter_by(id=space_id).first()
+        if not space:
+            print("Space not found")
+            return jsonify({"error": "Space not found"}), 404
+        
+        # Remove the user from the space's members
+        user_id = request.json.get("user_id")
+        if not user_id:
+            print("No user ID provided")
+            return jsonify({"error": "No user ID provided"}), 400
+        
+        space.remove_member(user_id)  # Assuming you have a method to remove member
+        db.session.commit()
+        print("User left the space successfully.")
+        return jsonify({"success": True, "message": "User left the space successfully."}), 200
+    
+    except Exception as e:
+        print(f"Error: {e}")
+        db.session.rollback()
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@app.route("/spaces/<int:space_id>", methods=["DELETE"])
+def delete_space(space_id):
+    try:
+        user_id = session.get("user_id")  # Retrieve user_id from the session
+        if not user_id:
+            print("Unauthorized: User not authenticated")
+            return jsonify({"error": "Unauthorized"}), 401
+
+        user = User.query.get(user_id)
+        if not user:
+            print("User not found")
+            return jsonify({"error": "User not found"}), 404
+
+        space = Space.query.get(space_id)
+        if not space:
+            print("Space not found")
+            return jsonify({"error": "Space not found"}), 404
+
+        print(f"User ID: {user_id}, Space Creator ID: {space.creator_id}")
+        if user_id != space.creator_id:
             print("Permission denied. User is not the creator of this space")
             return jsonify({"error": "Permission denied. You are not the creator of this space"}), 403
 
         db.session.delete(space)
         db.session.commit()
-        print(session)
-
         print("Space deleted successfully")
-
         return jsonify({"success": True, "message": "Space deleted successfully"}), 200
+
+    except Exception as e:
+        print(f"Error: {e}")
+        db.session.rollback()
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@app.route("/memberships", methods=["GET"])
+def get_membership():
+    space_id = request.args.get('spaceId')
+    user_id = request.args.get('userId')
+
+    if not space_id or not user_id:
+        return jsonify({"error": "Missing required parameters"}), 400
+
+    space = Space.query.get(space_id)
+    if not space:
+        return jsonify({"error": "Space not found"}), 404
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    is_member = space.is_member(user_id)
+    return jsonify({"isMember": is_member})
+
+@app.route("/spaces/<space_id>/members", methods=["PUT"])
+def update_membership(space_id):
+    try:
+        data = request.get_json()
+        user_ids = data.get("userIds", [])
+
+        if not user_ids:
+            return jsonify({"error": "Missing required parameters"}), 400
+
+        space = Space.query.get(space_id)
+
+        if not space:
+            return jsonify({"error": "Space not found"}), 404
+
+        space.members = [User.query.get(user_id) for user_id in user_ids]
+        db.session.commit()
+
+        return jsonify({"success": True, "message": "Membership updated successfully"}), 200
 
     except Exception as e:
         print(f"Error: {e}")
@@ -947,6 +1063,73 @@ def get_notifications(user_id):
             })
 
     return jsonify(notifications)
+
+@app.route("/search", methods=["POST"])
+def search():
+    try:
+        data = request.get_json()
+        query = data.get("query")
+
+        if not query:
+            return jsonify({"error": "Missing search query"}), 400
+
+        # Search for users
+        users = User.query.filter(
+            or_(
+                User.first_name.ilike(f"%{query}%"),
+                User.last_name.ilike(f"%{query}%"),
+                User.email.ilike(f"%{query}%"),
+                User.occupation.ilike(f"%{query}%")
+            )
+        ).all()
+
+        # Search for spaces
+        spaces = Space.query.filter(
+            Space.title.ilike(f"%{query}%")
+        ).all()
+
+        # Search for posts
+        posts = Post.query.filter(
+            Post.content.ilike(f"%{query}%")
+        ).all()
+
+        # Prepare the response data
+        search_results = {
+            "users": [
+                {
+                    "id": user.id,
+                    "firstName": user.first_name,
+                    "lastName": user.last_name,
+                    "email": user.email,
+                    "occupation": user.occupation,
+                    "picturePath": user.picture_path
+                } for user in users
+            ],
+            "spaces": [
+                {
+                    "id": space.id,
+                    "title": space.title,
+                    "isPublic": space.is_public
+                } for space in spaces
+            ],
+            "posts": [
+                {
+                    "id": post.id,
+                    "content": post.content,
+                    "firstName": post.first_name,
+                    "lastName": post.last_name,
+                    "userPicturePath": post.user.picture_path
+                } for post in posts
+            ]
+        }
+        
+        print("Sending search results:", search_results)
+        return jsonify(search_results)
+    except Exception as e:
+        print(f"Error in search: {e}")
+        print("Sending error response:", {"error": "Internal Server Error"})
+        return jsonify({"error": "Internal Server Error"}), 500
+
 
 if __name__ == "__main__":
     app.run(debug=True)

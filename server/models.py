@@ -39,6 +39,8 @@ class User(db.Model):
 
     posts = db.relationship('Post', backref='user', lazy=True)
     comments = db.relationship('Comment', backref='user', lazy=True)
+    # space_memberships = db.relationship('Space', secondary='space_memberships', back_populates='members')
+    space_memberships = db.relationship('SpaceMembership', backref='user')
     
     # Define the many-to-many relationship on the User side
     friends = db.relationship('User', secondary=friends_association, 
@@ -105,6 +107,32 @@ class Space(db.Model):
 
     # Establish a relationship back to the user (creator of the space)
     creator = db.relationship('User', backref='created_spaces', lazy=True)
+
+    # Define the many-to-many relationship with users through the 'memberships' table
+    members = db.relationship('User', secondary='space_memberships', backref='spaces')
+
+    def is_member(self, user_id):
+        """
+        Check if the user with the given user_id is a member of this space.
+        """
+        return user_id in [member.id for member in self.members]
+
+    def add_member(self, user_id):
+        """
+        Add a user with the given user_id as a member of this space.
+        """
+        user = User.query.get(user_id)
+        if user:
+            self.members.append(user)
+    
+class SpaceMembership(db.Model):
+    __tablename__ = 'space_memberships'
+
+    user_id = db.Column(db.String(32), db.ForeignKey('users.id'), primary_key=True)
+    space_id = db.Column(db.String(32), db.ForeignKey('spaces.id'), primary_key=True)
+
+    # user = db.relationship('User', back_populates='spaces')
+    # space = db.relationship('Space', back_populates='memberships')
     
 class Discussion(db.Model):
     __tablename__ = 'discussions'
