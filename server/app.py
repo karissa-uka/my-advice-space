@@ -11,7 +11,7 @@ from flask_admin import Admin
 from flask_admin .contrib.sqla import ModelView
 import os
 from config import ApplicationConfig
-from models import db, User, Post, Comment, Space, Discussion, DiscussionComment
+from models import db, User, Post, Comment, Space, Discussion, DiscussionComment, likes_association, dislikes_association
 import traceback
 from string import ascii_uppercase
 
@@ -395,17 +395,16 @@ def delete_post(id):
         return jsonify({"Error": "Post not found"}), 404
 
     try:
-        for user in post.liked_by:
-            post.liked_by.remove(user)
-            db.session.commit()
-        for user in post.disliked_by:
-            post.disliked_by.remove(user)
-            db.session.commit()      
-        comments = Comment.query.filter_by(post_id=post.id).all()
-        for comment in comments:
+        # Delete all comments associated with the post
+        for comment in post.comments:
             db.session.delete(comment)
             db.session.commit()
-            
+
+        # Delete the likes and dislikes associated with the post
+        db.session.query(likes_association).filter(likes_association.c.post_id == post.id).delete()
+        db.session.query(dislikes_association).filter(dislikes_association.c.post_id == post.id).delete()
+
+        # Delete the post
         db.session.delete(post)
         db.session.commit()
     except StaleDataError as e:
@@ -417,6 +416,7 @@ def delete_post(id):
         print(e)
         return jsonify({"Error": f"Internal Server Error: {str(e)}"}), 500
 
+    # Retrieve all the updated posts
     posts = Post.query.all()
 
     post_list = [{
@@ -1051,7 +1051,7 @@ def get_notifications(user_id):
             })
 
     if notification_type == "occupation" or notification_type is None:
-        # Assuming the original route's intent was to notify users of others with the same occupation
+        # the original route's intent to notify users of others with the same occupation
         matches = User.query.filter(User.occupation == user.occupation, User.id != user_id).all()
         for match in matches:
             notifications.append({
